@@ -22,11 +22,10 @@ public enum Authenticator {
         email: String,
         password: String,
         code: String = "",
-        cookies: [Cookie] = []
+        cookies: [Cookie] = [],
+        deviceIdentifier: String = Configuration.deviceIdentifier
     ) async throws -> Account {
-        let deviceIdentifier = Configuration.deviceIdentifier
-
-        let bagOutput = try await Bag.fetchBag()
+        let bagOutput = try await Bag.fetchBag(deviceIdentifier: deviceIdentifier)
 
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
