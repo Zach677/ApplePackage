@@ -13,22 +13,12 @@ public enum Bag {
         public var authEndpoint: URL
     }
 
-    private static let defaultAuthEndpoint = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
+    private static let defaultAuthEndpoint = "https://auth.itunes.apple.com/auth/v1/native/fast/"
 
     public static func fetchBag() async throws -> BagOutput {
         let deviceIdentifier = Configuration.deviceIdentifier
 
-        let client = HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: .init(
-                tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .follow(max: 8, allowCycles: false),
-                timeout: .init(
-                    connect: .seconds(Configuration.timeoutConnect),
-                    read: .seconds(Configuration.timeoutRead)
-                )
-            ).then { $0.httpVersion = .http1Only }
-        )
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .follow(max: 8, allowCycles: false))
         defer { _ = client.shutdown() }
 
         var comps = URLComponents()
@@ -80,11 +70,13 @@ public enum Bag {
             return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
         }
 
-        // authenticateAccount lives inside the nested urlBag dict
-        let urlBag = plist["urlBag"] as? [String: Any] ?? plist
+        // authenticateAccount used to live inside the nested urlBag dict,
+        // newer bag responses move it to the plist root
+        let urlBag = plist["urlBag"] as? [String: Any] ?? [:]
+        let authURLString = (plist["authenticateAccount"] as? String) ?? (urlBag["authenticateAccount"] as? String)
 
-        guard let authURLString = urlBag["authenticateAccount"] as? String,
-              let authURL = URL(string: authURLString)
+        guard let authURLString,
+              let authURL = normalizedAuthEndpoint(from: authURLString)
         else {
             APLogger.debug("bag: no authenticateAccount in plist, using default auth endpoint")
             return BagOutput(authEndpoint: URL(string: defaultAuthEndpoint)!)
@@ -92,6 +84,24 @@ public enum Bag {
 
         APLogger.info("bag: auth endpoint resolved to \(authURL)")
         return BagOutput(authEndpoint: authURL)
+    }
+
+    /// The bag advertises the native auth endpoint without the `/fast/` sub-path
+    /// that the login flow requires; the no-trailing-slash variant 301s to an
+    /// HTML page. Legacy endpoints pass through unchanged.
+    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {
+        guard var comps = URLComponents(string: urlString) else { return nil }
+        if comps.host == "auth.itunes.apple.com" {
+            var path = comps.path
+            while path.hasSuffix("/") {
+                path.removeLast()
+            }
+            if !path.hasSuffix("/fast") {
+                path += "/fast"
+            }
+            comps.path = path + "/"
+        }
+        return comps.url
     }
 
     /// The bag XML response wraps the plist inside `<Document><Protocol><plist>...</plist>`.

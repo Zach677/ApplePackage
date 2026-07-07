@@ -26,7 +26,7 @@ struct Download: AsyncParsableCommand {
     @Option(help: "Version ID")
     var versionID: String?
 
-    @Option(help: "Platform to download for: iPhone, iPad, or AppleTV")
+    @Option(help: "Platform to download for: iPhone, iPad, or AppleTV (default: iPhone)")
     var platform: PlatformArgument?
 
     @Option(help: "Output path")
@@ -35,7 +35,9 @@ struct Download: AsyncParsableCommand {
     func run() async throws {
         globalOptions.apply()
         let outputURL = try validateOutputURL(output)
-        let entityType = platform?.entityType
+        // The redownload fallback endpoint serves AppleTV builds when no
+        // platform-pinned version ID is provided, so always resolve one.
+        let entityType = platform?.entityType ?? .iPhone
 
         try await Configuration.withAccount(email: email) { account in
             try await Authenticator.rotatePasswordToken(for: &account)
@@ -55,7 +57,9 @@ struct Download: AsyncParsableCommand {
                 externalVersionID: resolvedVersionID
             )
 
-            let url = URL(string: downloadOutput.downloadURL)!
+            guard let url = URL(string: downloadOutput.downloadURL) else {
+                throw NSError(domain: "InvalidResponse", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid download URL: \(downloadOutput.downloadURL)"])
+            }
 
             let (contentLength, supportsRanges) = try await getContentInfo(from: url)
             print("downloading \(app.name) (\(app.bundleID)) version \(downloadOutput.bundleShortVersionString)")
@@ -91,9 +95,7 @@ struct Download: AsyncParsableCommand {
                 into: tempURL.path
             )
 
-            if let entityType {
-                try PackagePlatformValidator.ensurePackage(at: tempURL, supports: entityType)
-            }
+            try PackagePlatformValidator.ensurePackage(at: tempURL, supports: entityType)
 
             try replaceOutput(at: outputURL, with: tempURL)
 

@@ -14,51 +14,16 @@ public enum Download {
         app: Software,
         externalVersionID: String? = nil
     ) async throws -> DownloadOutput {
-        let deviceIdentifier = Configuration.deviceIdentifier
-
-        let client = HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: .init(
-                tlsConfiguration: Configuration.tlsConfiguration,
-                redirectConfiguration: .disallow,
-                timeout: .init(
-                    connect: .seconds(Configuration.timeoutConnect),
-                    read: .seconds(Configuration.timeoutRead)
-                )
-            ).then { $0.httpVersion = .http1Only }
-        )
+        let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
         defer { _ = client.shutdown() }
 
-        let request = try makeRequest(
-            account: account,
+        let dict = try await StoreDownloadEndpoint.fetchProductWithFallback(
+            client: client,
+            account: &account,
             app: app,
-            guid: deviceIdentifier,
+            deviceIdentifier: Configuration.deviceIdentifier,
             externalVersionID: externalVersionID ?? ""
         )
-        let response = try await client.execute(request: request).get()
-
-        APLogger.logResponse(
-            status: response.status.code,
-            headers: response.headers.map { ($0.name, $0.value) },
-            bodySize: response.body?.readableBytes
-        )
-
-        account.cookie.mergeCookies(response.cookies)
-
-        try ensure(response.status == .ok, Strings.requestFailed(status: response.status.code))
-
-        guard var body = response.body,
-              let data = body.readData(length: body.readableBytes)
-        else {
-            try ensureFailed(Strings.responseBodyEmpty)
-        }
-
-        let plist = try PropertyListSerialization.propertyList(
-            from: data,
-            options: [],
-            format: nil
-        ) as? [String: Any]
-        guard let dict = plist else { try ensureFailed(Strings.invalidResponse) }
 
         if let failureType = dict["failureType"] as? String {
             let customerMessage = dict["customerMessage"] as? String
@@ -127,48 +92,6 @@ public enum Download {
             bundleShortVersionString: version,
             bundleVersion: bundleVersion,
             iTunesMetadata: iTunesMetadata
-        )
-    }
-
-    private static func makeRequest(
-        account: Account,
-        app: Software,
-        guid: String,
-        externalVersionID: String
-    ) throws -> HTTPClient.Request {
-        var payload: [String: Any] = [
-            "creditDisplay": "",
-            "guid": guid,
-            "salableAdamId": app.id,
-        ]
-
-        if !externalVersionID.isEmpty {
-            payload["externalVersionId"] = externalVersionID
-        }
-
-        let data = try PropertyListSerialization.data(fromPropertyList: payload, format: .xml, options: 0)
-
-        var headers: [(String, String)] = [
-            ("Content-Type", "application/x-apple-plist"),
-            ("User-Agent", Configuration.userAgent),
-            ("iCloud-DSID", account.directoryServicesIdentifier),
-            ("X-Dsid", account.directoryServicesIdentifier),
-        ]
-
-        let host = Configuration.storeAPIHost(pod: account.pod)
-        let urlString = "https://\(host)/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
-
-        for item in account.cookie.buildCookieHeader(URL(string: urlString)!) {
-            headers.append(item)
-        }
-
-        APLogger.logRequest(method: "POST", url: urlString, headers: headers)
-
-        return try .init(
-            url: urlString,
-            method: .POST,
-            headers: .init(headers),
-            body: .data(data)
         )
     }
 }
