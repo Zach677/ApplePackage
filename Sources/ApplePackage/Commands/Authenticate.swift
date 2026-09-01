@@ -107,13 +107,14 @@ public enum Authenticator {
         return try comps.url.get()
     }
 
-    private static func makeRequest(
+    static func makeRequest(
         endpoint: URL,
         email: String,
         password: String,
         code: String,
         cookies: [Cookie],
-        deviceIdentifier: String
+        deviceIdentifier: String,
+        signAction: (Data) throws -> String = AppleActionSigner.sign
     ) throws -> HTTPClient.Request {
         let parameters: [String: String] = [
             "appleId": email,
@@ -135,7 +136,9 @@ public enum Authenticator {
         for item in cookies.buildCookieHeader(endpoint) {
             headers.append(item)
         }
+        let actionSignature = try signAction(data)
         APLogger.logRequest(method: "POST", url: endpoint.absoluteString, headers: headers)
+        headers.append(("X-Apple-ActionSignature", actionSignature))
         return try .init(
             url: endpoint.absoluteString,
             method: .POST,

@@ -14,6 +14,45 @@ final class ApplePackageAuthenticateTests: XCTestCase {
         TestConfiguration.bootstrap()
     }
 
+    func testLoginRequestSignsExactPayload() throws {
+        let endpoint = try XCTUnwrap(URL(string: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"))
+        var signedPayload: Data?
+
+        let request = try Authenticator.makeRequest(
+            endpoint: endpoint,
+            email: "test@example.com",
+            password: "password",
+            code: "123456",
+            cookies: [],
+            deviceIdentifier: "ABCDEF123456",
+            signAction: { payload in
+                signedPayload = payload
+                return "dGVzdC1zaWduYXR1cmU="
+            }
+        )
+
+        let payload = try XCTUnwrap(signedPayload)
+        let propertyList = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: payload, format: nil) as? [String: String]
+        )
+        XCTAssertEqual(propertyList["appleId"], "test@example.com")
+        XCTAssertEqual(propertyList["password"], "password123456")
+        XCTAssertEqual(propertyList["guid"], "ABCDEF123456")
+        XCTAssertEqual(request.headers.first(name: "X-Apple-ActionSignature"), "dGVzdC1zaWduYXR1cmU=")
+    }
+
+    func testCommerceKitSignerProducesSignature() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["APPLEPACKAGE_TEST_SAP"] == "1",
+            "Set APPLEPACKAGE_TEST_SAP=1 to run the CommerceKit integration test"
+        )
+
+        let signature = try AppleActionSigner.sign(Data("ApplePackage SAP integration test".utf8))
+
+        XCTAssertFalse(signature.isEmpty)
+        XCTAssertNotNil(Data(base64Encoded: signature))
+    }
+
     @MainActor func testRotatePasswordToken() async throws {
         try XCTSkipUnless(TestConfiguration.hasAuthenticatedAccount, "No authenticated account available")
         try await withAccount(email: testAccountEmail) { account in

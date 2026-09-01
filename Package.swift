@@ -27,11 +27,18 @@ let package = Package(
             .target(name: "ApplePackage"),
         ]),
         .target(name: "ApplePackage", dependencies: [
+            .target(name: "CommerceKitSigner", condition: .when(platforms: [.macOS])),
             .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             .product(name: "AsyncHTTPClient", package: "async-http-client"),
             .product(name: "Collections", package: "swift-collections"),
             .product(name: "Logging", package: "swift-log"),
         ]),
+        .target(
+            name: "CommerceKitSigner",
+            path: "Sources/CommerceKitSigner",
+            publicHeadersPath: "include",
+            linkerSettings: [.linkedFramework("Foundation")]
+        ),
         .testTarget(name: "ApplePackageTests", dependencies: ["ApplePackage"]),
     ]
 )

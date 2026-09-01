@@ -22,6 +22,7 @@ let package = Package(
                 "Configuration",
                 "Models/Account.swift",
                 "Supplement/Accounts.swift",
+                "Supplement/AppleActionSigner.swift",
                 "Supplement/Cookie.swift",
                 "Supplement/Ext+Optional.swift",
                 "Supplement/Logger.swift",
