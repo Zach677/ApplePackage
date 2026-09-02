@@ -14,9 +14,11 @@ public enum Authenticator {
         case success(Account)
         case codeRequired
         case redirect(URL)
-        case retry
         case failure(String)
     }
+
+    private static let maxTransientRequestAttempts = 3
+    private static let transientRetryDelayNanoseconds: UInt64 = 250_000_000
 
     public static func authenticate(
         email: String,
@@ -34,54 +36,67 @@ public enum Authenticator {
         var cookies: [Cookie] = cookies
         var storeFront = ""
         var pod: String?
-        var currentAttempt = 1
         var redirectAttempt = 0
-        var lastError: Error?
+        let requestData = try makeRequestData(
+            email: email,
+            password: password,
+            code: code,
+            deviceIdentifier: deviceIdentifier
+        )
 
-        while currentAttempt <= 2, redirectAttempt <= 3 {
-            defer { currentAttempt += 1 }
-            do {
+        while redirectAttempt <= 3 {
+            let response = try await sendAuthenticationRequest {
                 let request = try makeRequest(
                     endpoint: requestEndpoint,
-                    email: email,
-                    password: password,
-                    code: code,
-                    cookies: cookies,
-                    deviceIdentifier: deviceIdentifier
+                    data: requestData,
+                    cookies: cookies
                 )
                 let response = try await client.execute(request: request).get()
-                let result = try parseResponse(
-                    response,
-                    email: email,
-                    password: password,
-                    code: code,
-                    cookies: &cookies,
-                    storeFront: &storeFront,
-                    pod: &pod
-                )
-                switch result {
-                case let .success(account):
-                    return account
-                case let .redirect(uRL):
-                    requestEndpoint = uRL
-                    currentAttempt -= 1 // allow one more attempt when redirect
-                    redirectAttempt += 1
-                    continue
-                case .codeRequired:
-                    currentAttempt += 65535 // stop attempts
-                    try ensureFailed(Strings.authRequiresVerificationCode)
-                case .retry:
-                    continue
-                case let .failure(string):
-                    try ensureFailed("\(Strings.authFailed): \(string)")
-                }
-            } catch {
-                lastError = error
+                return (response, response.status.code)
+            }
+            let result = try parseResponse(
+                response,
+                email: email,
+                password: password,
+                code: code,
+                cookies: &cookies,
+                storeFront: &storeFront,
+                pod: &pod
+            )
+            switch result {
+            case let .success(account):
+                return account
+            case let .redirect(url):
+                requestEndpoint = url
+                redirectAttempt += 1
+            case .codeRequired:
+                try ensureFailed(Strings.authRequiresVerificationCode)
+            case let .failure(string):
+                try ensureFailed("\(Strings.authFailed): \(string)")
             }
         }
 
-        if let lastError = lastError { throw lastError }
         try ensureFailed(Strings.authFailedUnknown)
+    }
+
+    static func sendAuthenticationRequest<Response>(
+        execute: () async throws -> (response: Response, statusCode: UInt),
+        sleep: (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+    ) async throws -> Response {
+        for attempt in 1 ... maxTransientRequestAttempts {
+            let result = try await execute()
+            guard isTransientAuthenticationStatus(result.statusCode),
+                  attempt < maxTransientRequestAttempts
+            else {
+                return result.response
+            }
+            try await sleep(UInt64(attempt) * transientRetryDelayNanoseconds)
+        }
+        preconditionFailure("authentication retry loop must return")
+    }
+
+    private static func isTransientAuthenticationStatus(_ statusCode: UInt) -> Bool {
+        statusCode == 204 || statusCode == 404 || statusCode / 100 == 5
     }
 
     public static func rotatePasswordToken(for account: inout Account) async throws {
@@ -116,6 +131,26 @@ public enum Authenticator {
         deviceIdentifier: String,
         signAction: (Data) throws -> String = AppleActionSigner.sign
     ) throws -> HTTPClient.Request {
+        let data = try makeRequestData(
+            email: email,
+            password: password,
+            code: code,
+            deviceIdentifier: deviceIdentifier
+        )
+        return try makeRequest(
+            endpoint: endpoint,
+            data: data,
+            cookies: cookies,
+            signAction: signAction
+        )
+    }
+
+    private static func makeRequestData(
+        email: String,
+        password: String,
+        code: String,
+        deviceIdentifier: String
+    ) throws -> Data {
         let parameters: [String: String] = [
             "appleId": email,
             "attempt": "\(code.isEmpty ? "4" : "2")",
@@ -124,11 +159,19 @@ public enum Authenticator {
             "rmp": "0",
             "why": "signIn",
         ]
-        let data = try PropertyListSerialization.data(
+        return try PropertyListSerialization.data(
             fromPropertyList: parameters,
             format: .xml,
             options: 0
         )
+    }
+
+    private static func makeRequest(
+        endpoint: URL,
+        data: Data,
+        cookies: [Cookie],
+        signAction: (Data) throws -> String = AppleActionSigner.sign
+    ) throws -> HTTPClient.Request {
         var headers: [(String, String)] = [
             ("User-Agent", Configuration.userAgent),
             ("Content-Type", "application/x-apple-plist"),

@@ -41,6 +41,53 @@ final class ApplePackageAuthenticateTests: XCTestCase {
         XCTAssertEqual(request.headers.first(name: "X-Apple-ActionSignature"), "dGVzdC1zaWduYXR1cmU=")
     }
 
+    func testRetriesTransientAuthenticationResponses() async throws {
+        var statuses: [UInt] = [204, 404, 200]
+        var sleepDurations: [UInt64] = []
+
+        let response = try await Authenticator.sendAuthenticationRequest(
+            execute: {
+                let status = statuses.removeFirst()
+                return (status, status)
+            },
+            sleep: { sleepDurations.append($0) }
+        )
+
+        XCTAssertEqual(response, 200)
+        XCTAssertTrue(statuses.isEmpty)
+        XCTAssertEqual(sleepDurations, [250_000_000, 500_000_000])
+    }
+
+    func testDoesNotRetryNonTransientAuthenticationResponse() async throws {
+        var callCount = 0
+
+        let response = try await Authenticator.sendAuthenticationRequest(
+            execute: {
+                callCount += 1
+                return (403, 403)
+            },
+            sleep: { _ in XCTFail("non-transient response must not sleep") }
+        )
+
+        XCTAssertEqual(response, 403)
+        XCTAssertEqual(callCount, 1)
+    }
+
+    func testStopsAfterThreeTransientAuthenticationResponses() async throws {
+        var callCount = 0
+
+        let response = try await Authenticator.sendAuthenticationRequest(
+            execute: {
+                callCount += 1
+                return (204, 204)
+            },
+            sleep: { _ in }
+        )
+
+        XCTAssertEqual(response, 204)
+        XCTAssertEqual(callCount, 3)
+    }
+
     func testCommerceKitSignerProducesSignature() throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["APPLEPACKAGE_TEST_SAP"] == "1",
