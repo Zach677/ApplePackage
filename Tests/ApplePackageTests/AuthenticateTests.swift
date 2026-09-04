@@ -73,6 +73,22 @@ final class ApplePackageAuthenticateTests: XCTestCase {
         XCTAssertEqual(callCount, 1)
     }
 
+    func testLegacyAuthenticateEndpointRewritesToNativeFast() {
+        XCTAssertEqual(
+            Bag.normalizedAuthEndpoint(
+                from: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
+            )?.absoluteString,
+            "https://auth.itunes.apple.com/auth/v1/native/fast/"
+        )
+        XCTAssertEqual(
+            Authenticator.resolvedRedirectURL(
+                locationHeader: nil,
+                currentURL: URL(string: "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=ABCDEF123456")!
+            )?.absoluteString,
+            "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456"
+        )
+    }
+
     func testRedirectWithoutLocationAddsNativeFastTrailingSlash() {
         let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast?guid=ABCDEF123456")!
         let url = Authenticator.resolvedRedirectURL(locationHeader: nil, currentURL: current)

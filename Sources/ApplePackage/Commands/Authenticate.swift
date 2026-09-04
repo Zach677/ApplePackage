@@ -154,12 +154,11 @@ public enum Authenticator {
     /// with no Location header. Recover by adding the slash, and trim/resolve
     /// any Location we do receive against the current request URL.
     static func resolvedRedirectURL(locationHeader: String?, currentURL: URL) -> URL? {
-        if let raw = locationHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty,
-           let url = URL(string: raw, relativeTo: currentURL)?.absoluteURL,
-           url.scheme?.lowercased() == "https"
-        {
-            return Bag.normalizedAuthEndpoint(from: url.absoluteString) ?? url
+        if let raw = locationHeader?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            let parsed = URL(string: raw, relativeTo: currentURL)?.absoluteURL ?? URL(string: raw)
+            if let parsed {
+                return Bag.normalizedAuthEndpoint(from: parsed.absoluteString) ?? parsed
+            }
         }
 
         guard let normalized = Bag.normalizedAuthEndpoint(from: currentURL.absoluteString),

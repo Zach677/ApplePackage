@@ -85,12 +85,21 @@ public enum Bag {
         return BagOutput(authEndpoint: authURL)
     }
 
-    /// The bag advertises the native auth endpoint without the `/fast/` sub-path
-    /// that the login flow requires; the no-trailing-slash variant 301s to an
-    /// HTML page without a Location header. Legacy endpoints pass through unchanged.
+    /// The bag still advertises MZFinance `authenticate`, but that host now 301s
+    /// without a Location header. Signed login has to hit native `/fast/`.
+    /// `auth.itunes.apple.com` URLs without the `/fast/` trailing slash have the
+    /// same 301-without-Location failure mode.
     static func normalizedAuthEndpoint(from urlString: String) -> URL? {
         guard var comps = URLComponents(string: urlString) else { return nil }
-        if comps.host?.lowercased() == "auth.itunes.apple.com" {
+        let host = comps.host?.lowercased() ?? ""
+        if host == "buy.itunes.apple.com",
+           comps.path.contains("authenticate")
+        {
+            var native = URLComponents(string: defaultAuthEndpoint)
+            native?.query = comps.query
+            return native?.url
+        }
+        if host == "auth.itunes.apple.com" {
             var path = comps.path
             while path.hasSuffix("/") {
                 path.removeLast()
