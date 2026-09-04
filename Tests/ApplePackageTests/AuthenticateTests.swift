@@ -103,6 +103,28 @@ final class ApplePackageAuthenticateTests: XCTestCase {
         XCTAssertNil(Authenticator.resolvedRedirectURL(locationHeader: nil, currentURL: current))
     }
 
+    func testCookieReauthRedirectWithoutLocationRetriesWithoutCookies() {
+        let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456")!
+        XCTAssertEqual(
+            Authenticator.redirectHandling(
+                status: .found,
+                locationHeader: nil,
+                currentURL: current,
+                bodyLength: 0
+            ),
+            .retryWithoutCookies
+        )
+        XCTAssertEqual(
+            Authenticator.redirectHandling(
+                status: .found,
+                locationHeader: nil,
+                currentURL: current,
+                bodyLength: 162
+            ),
+            .parseBody
+        )
+    }
+
     func testRedirectTrimsLocationAndResolvesRelativePath() {
         let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456")!
         let url = Authenticator.resolvedRedirectURL(

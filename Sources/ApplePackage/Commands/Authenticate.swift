@@ -24,7 +24,14 @@ public enum Authenticator {
         case success(AuthenticationResult)
         case codeRequired
         case redirect(URL)
+        case retryWithoutCookies
         case failure(String)
+    }
+
+    enum RedirectHandling: Equatable {
+        case follow(URL)
+        case parseBody
+        case retryWithoutCookies
     }
 
     private static let maxTransientRequestAttempts = 3
@@ -63,6 +70,7 @@ public enum Authenticator {
         var storeFront = ""
         var pod: String?
         var redirectAttempt = 0
+        var didClearCookies = false
         let requestData = try makeRequestData(
             email: email,
             password: password,
@@ -96,6 +104,12 @@ public enum Authenticator {
             case let .redirect(url):
                 requestEndpoint = url
                 redirectAttempt += 1
+            case .retryWithoutCookies:
+                guard !didClearCookies else {
+                    try ensureFailed("\(Strings.authFailed): \(Strings.failedToRetrieveRedirect)")
+                }
+                cookies = []
+                didClearCookies = true
             case .codeRequired:
                 try ensureFailed(Strings.authRequiresVerificationCode)
             case let .failure(string):
@@ -167,6 +181,38 @@ public enum Authenticator {
             return nil
         }
         return normalized
+    }
+
+    /// Cookie-backed reauth often 302s with no Location. Follow Location when we
+    /// have one; otherwise parse a plist body or retry once without cookies.
+    static func redirectHandling(
+        status: HTTPResponseStatus,
+        locationHeader: String?,
+        currentURL: URL,
+        bodyLength: Int
+    ) -> RedirectHandling? {
+        let redirectStatuses: [HTTPResponseStatus] = [
+            .movedPermanently, .found, .seeOther, .temporaryRedirect, .permanentRedirect,
+        ]
+        guard redirectStatuses.contains(status) else { return nil }
+        if let url = resolvedRedirectURL(locationHeader: locationHeader, currentURL: currentURL) {
+            return .follow(url)
+        }
+        if bodyLength > 0 {
+            return .parseBody
+        }
+        return .retryWithoutCookies
+    }
+
+    static func locationCandidate(from headers: HTTPHeaders) -> String? {
+        for name in ["location", "x-apple-orig-url"] {
+            if let value = headers.first(name: name)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty
+            {
+                return value
+            }
+        }
+        return nil
     }
 
     static func makeRequest(
@@ -270,15 +316,20 @@ public enum Authenticator {
             APLogger.info("auth: received pod value: \(podValue)")
         }
 
-        let redirectStatuses: [HTTPResponseStatus] = [.movedPermanently, .found, .seeOther, .temporaryRedirect, .permanentRedirect]
-        if redirectStatuses.contains(response.status) {
-            guard let url = resolvedRedirectURL(
-                locationHeader: response.headers.first(name: "location"),
-                currentURL: currentURL
-            ) else {
-                return .failure("\(Strings.failedToRetrieveRedirect) (HTTP \(response.status.code))")
+        if let handling = redirectHandling(
+            status: response.status,
+            locationHeader: locationCandidate(from: response.headers),
+            currentURL: currentURL,
+            bodyLength: response.body?.readableBytes ?? 0
+        ) {
+            switch handling {
+            case let .follow(url):
+                return .redirect(url)
+            case .retryWithoutCookies:
+                return .retryWithoutCookies
+            case .parseBody:
+                break
             }
-            return .redirect(url)
         }
 
         guard var body = response.body,
@@ -287,11 +338,25 @@ public enum Authenticator {
             return .failure("response body is empty (code: \(response.status.code))")
         }
 
-        let listItem = try PropertyListSerialization.propertyList(
-            from: data,
-            options: [],
-            format: nil
-        )
+        let listItem: Any
+        do {
+            listItem = try PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            )
+        } catch {
+            if redirectHandling(
+                status: response.status,
+                locationHeader: nil,
+                currentURL: currentURL,
+                bodyLength: 0
+            ) != nil
+            {
+                return .retryWithoutCookies
+            }
+            throw error
+        }
         let dic = try (listItem as? [String: Any]).get(Strings.responseNotDictionary)
 
         if let failureType = dic["failureType"] as? String,
