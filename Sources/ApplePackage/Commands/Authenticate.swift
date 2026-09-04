@@ -82,6 +82,7 @@ public enum Authenticator {
             }
             let result = try parseResponse(
                 response,
+                currentURL: requestEndpoint,
                 email: email,
                 password: password,
                 code: code,
@@ -145,7 +146,28 @@ public enum Authenticator {
         comps.queryItems = [
             URLQueryItem(name: "guid", value: deviceIdentifier),
         ]
-        return try comps.url.get()
+        let url = try comps.url.get()
+        return Bag.normalizedAuthEndpoint(from: url.absoluteString) ?? url
+    }
+
+    /// Apple's native auth host 301s `/fast` (no trailing slash) to an HTML page
+    /// with no Location header. Recover by adding the slash, and trim/resolve
+    /// any Location we do receive against the current request URL.
+    static func resolvedRedirectURL(locationHeader: String?, currentURL: URL) -> URL? {
+        if let raw = locationHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty,
+           let url = URL(string: raw, relativeTo: currentURL)?.absoluteURL,
+           url.scheme?.lowercased() == "https"
+        {
+            return Bag.normalizedAuthEndpoint(from: url.absoluteString) ?? url
+        }
+
+        guard let normalized = Bag.normalizedAuthEndpoint(from: currentURL.absoluteString),
+              normalized.absoluteString != currentURL.absoluteString
+        else {
+            return nil
+        }
+        return normalized
     }
 
     static func makeRequest(
@@ -218,6 +240,7 @@ public enum Authenticator {
 
     private static func parseResponse(
         _ response: HTTPClient.Response,
+        currentURL: URL,
         email: String,
         password: String,
         code: String,
@@ -250,10 +273,11 @@ public enum Authenticator {
 
         let redirectStatuses: [HTTPResponseStatus] = [.movedPermanently, .found, .seeOther, .temporaryRedirect, .permanentRedirect]
         if redirectStatuses.contains(response.status) {
-            guard let location = response.headers.first(name: "location"),
-                  let url = URL(string: location)
-            else {
-                return .failure(Strings.failedToRetrieveRedirect)
+            guard let url = resolvedRedirectURL(
+                locationHeader: response.headers.first(name: "location"),
+                currentURL: currentURL
+            ) else {
+                return .failure("\(Strings.failedToRetrieveRedirect) (HTTP \(response.status.code))")
             }
             return .redirect(url)
         }

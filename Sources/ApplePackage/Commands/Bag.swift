@@ -87,10 +87,10 @@ public enum Bag {
 
     /// The bag advertises the native auth endpoint without the `/fast/` sub-path
     /// that the login flow requires; the no-trailing-slash variant 301s to an
-    /// HTML page. Legacy endpoints pass through unchanged.
-    private static func normalizedAuthEndpoint(from urlString: String) -> URL? {
+    /// HTML page without a Location header. Legacy endpoints pass through unchanged.
+    static func normalizedAuthEndpoint(from urlString: String) -> URL? {
         guard var comps = URLComponents(string: urlString) else { return nil }
-        if comps.host == "auth.itunes.apple.com" {
+        if comps.host?.lowercased() == "auth.itunes.apple.com" {
             var path = comps.path
             while path.hasSuffix("/") {
                 path.removeLast()

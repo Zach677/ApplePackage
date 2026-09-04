@@ -73,6 +73,41 @@ final class ApplePackageAuthenticateTests: XCTestCase {
         XCTAssertEqual(callCount, 1)
     }
 
+    func testRedirectWithoutLocationAddsNativeFastTrailingSlash() {
+        let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast?guid=ABCDEF123456")!
+        let url = Authenticator.resolvedRedirectURL(locationHeader: nil, currentURL: current)
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456"
+        )
+    }
+
+    func testRedirectWithoutLocationDoesNotLoopWhenTrailingSlashPresent() {
+        let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456")!
+        XCTAssertNil(Authenticator.resolvedRedirectURL(locationHeader: nil, currentURL: current))
+    }
+
+    func testRedirectTrimsLocationAndResolvesRelativePath() {
+        let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456")!
+        let url = Authenticator.resolvedRedirectURL(
+            locationHeader: " /auth/v1/native/fast/",
+            currentURL: current
+        )
+        XCTAssertEqual(url?.absoluteString, "https://auth.itunes.apple.com/auth/v1/native/fast/")
+    }
+
+    func testRedirectTrimsAbsoluteLocation() {
+        let current = URL(string: "https://auth.itunes.apple.com/auth/v1/native/fast/?guid=ABCDEF123456")!
+        let url = Authenticator.resolvedRedirectURL(
+            locationHeader: " https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=ABCDEF123456",
+            currentURL: current
+        )
+        XCTAssertEqual(
+            url?.absoluteString,
+            "https://p25-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=ABCDEF123456"
+        )
+    }
+
     func testStopsAfterThreeTransientAuthenticationResponses() async throws {
         var callCount = 0
 
