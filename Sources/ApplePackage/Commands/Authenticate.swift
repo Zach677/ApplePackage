@@ -9,9 +9,19 @@ import AsyncHTTPClient
 import Foundation
 import NIOHTTP1
 
+public struct AuthenticationResult: Sendable {
+    public var account: Account
+    public var responsePlist: Data
+
+    public init(account: Account, responsePlist: Data) {
+        self.account = account
+        self.responsePlist = responsePlist
+    }
+}
+
 public enum Authenticator {
     private enum LoginResponse {
-        case success(Account)
+        case success(AuthenticationResult)
         case codeRequired
         case redirect(URL)
         case failure(String)
@@ -27,6 +37,22 @@ public enum Authenticator {
         cookies: [Cookie] = [],
         deviceIdentifier: String = Configuration.deviceIdentifier
     ) async throws -> Account {
+        try await authenticateWithResponse(
+            email: email,
+            password: password,
+            code: code,
+            cookies: cookies,
+            deviceIdentifier: deviceIdentifier
+        ).account
+    }
+
+    public static func authenticateWithResponse(
+        email: String,
+        password: String,
+        code: String = "",
+        cookies: [Cookie] = [],
+        deviceIdentifier: String = Configuration.deviceIdentifier
+    ) async throws -> AuthenticationResult {
         let bagOutput = try await Bag.fetchBag(deviceIdentifier: deviceIdentifier)
 
         let client = Configuration.makeHTTPClient(redirectConfiguration: .disallow)
@@ -64,8 +90,8 @@ public enum Authenticator {
                 pod: &pod
             )
             switch result {
-            case let .success(account):
-                return account
+            case let .success(authenticationResult):
+                return authenticationResult
             case let .redirect(url):
                 requestEndpoint = url
                 redirectAttempt += 1
@@ -274,6 +300,6 @@ public enum Authenticator {
             cookie: cookies,
             pod: pod
         )
-        return .success(account)
+        return .success(AuthenticationResult(account: account, responsePlist: data))
     }
 }
